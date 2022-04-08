@@ -1,0 +1,176 @@
+var roi = 
+    /* color: #d63000 */
+    /* shown: false */
+    /* displayProperties: [
+      {
+        "type": "rectangle"
+      }
+    ] */
+    ee.FeatureCollection(
+        [ee.Feature(
+            ee.Geometry.Polygon(
+                [[[116.28771276795948, 35.056951155038156],
+                  [116.28771276795948, 34.99341194825911],
+                  [116.36118383729541, 34.99341194825911],
+                  [116.36118383729541, 35.056951155038156]]], null, false),
+            {
+              "system:index": "0"
+            })]);
+//************************
+//Code 1
+Map.centerObject(roi,8)
+Map.addLayer(roi, {color: "red",optional:1},'roi');
+ 
+//Landsat8 SR
+function rmCloud(image) {
+  var cloudShadowBitMask = (1 << 3);
+  var cloudsBitMask = (1 << 5);
+  var qa = image.select("pixel_qa");
+  var mask = qa.bitwiseAnd(cloudShadowBitMask).eq(0)
+                 .and(qa.bitwiseAnd(cloudsBitMask).eq(0));
+  return image.updateMask(mask);
+}
+
+
+function scaleImage(image) {
+  var time_start = image.get("system:time_start");
+  //image = image.multiply(0.0001);
+  image = image.set("system:time_start", time_start);
+  return image;
+}
+
+function I_GCVI(img) {
+  var nir = img.select("B5");
+  var red = img.select("B4");
+  var green = img.select("B3");
+  var i_gcvi = img.expression(
+    "B5/B3-(B4/B5)*15",
+    {
+      "B5": nir,
+      "B4": red,
+      "B3": green
+    }
+  );
+  return img.addBands(i_gcvi.rename("I_GCVI"));
+}
+
+var bands=["I_GCVI"];
+var l8_200218 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+              .filterBounds(roi)
+              .filterDate("2020-02-12", "2020-02-28")
+              .filter(ee.Filter.lte("CLOUD_COVER", 50))
+              //.map(rmCloud)
+              .map(scaleImage)
+              .map(I_GCVI)
+              .select(bands)
+              .map(function(image) {
+                    return image.clip(roi);
+                  })
+              .sort("system:time_start")
+              .median();
+var l8_200321 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+              .filterBounds(roi)
+              .filterDate("2020-03-15", "2020-03-31")
+              .filter(ee.Filter.lte("CLOUD_COVER", 50))
+              //.map(rmCloud)
+              .map(scaleImage)
+              .map(I_GCVI)
+              .select(bands)
+              .map(function(image) {
+                    return image.clip(roi);
+                  })
+              .sort("system:time_start")
+              .median();
+var l8_200422 = ee.ImageCollection("LANDSAT/LC08/C01/T1_SR")
+              .filterBounds(roi)
+              .filterDate("2020-04-16", "2020-04-30")
+              .filter(ee.Filter.lte("CLOUD_COVER", 50))
+              //.map(rmCloud)
+              .map(scaleImage)
+              .map(I_GCVI)
+              .select(bands)
+              .map(function(image) {
+                    return image.clip(roi);
+                  })
+              .sort("system:time_start")
+              .median();
+
+Map.addLayer(l8_200218,visParams, 'l8_200218');
+Map.addLayer(l8_200321,visParams, 'l8_200321');
+Map.addLayer(l8_200422,visParams, 'l8_200422');
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);
+}
+
+function I_GCVI1(img) {
+  var nir = img.select("B8");
+  var red = img.select("B4");
+  var green = img.select("B3");
+  var i_gcvi = img.expression(
+    "B8/B3-(B4/B8)*15",
+    {
+      "B8": nir,
+      "B4": red,
+      "B3": green
+    }
+  );
+  return img.addBands(i_gcvi.rename("I_GCVI1"));
+}
+
+var bands=["I_GCVI1"];
+var s2_2001 = ee.ImageCollection('COPERNICUS/S2_SR')
+              .filterBounds(roi)
+              .filterDate("2020-01-01", "2020-01-31")
+             .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE',30))
+              //.map(rmCloud)
+              .map(maskS2clouds)
+              .map(I_GCVI1)
+              .select(bands)
+              .map(function(image) {
+                    return image.clip(roi);
+                  })
+              .sort("system:time_start")
+              .median()
+              .reproject('EPSG:4326', null, 30);  
+Map.addLayer(s2_2001,visParams, 's2_2001');               
+var l8_1920 =s2_2001.addBands(l8_200218)
+                    .addBands(l8_200321)
+                    .addBands(l8_200422);
+                    
+print("select l8", l8_1920);           
+
+var visParams = {
+  //bands: ['B4', 'B3', 'B2'],
+  min: -1,
+  max: 1
+};
+
+var visParams = {
+  //bands: ['B4', 'B3', 'B2'],
+  min: 0,
+  max: 1,
+  palette: ["000000", "00ff00"]
+};
+
+var winter_wheat=l8_1920.reduce({//axis:5,
+                                reducer:ee.Reducer.sum()})
+                                .gt(0);
+print("select winter_wheat", winter_wheat);
+Map.addLayer(winter_wheat,visParams, 'winter_wheat');
+
+Export.image.toAsset({
+      image: winter_wheat, 
+      description: 'map_winter_wheat', 
+      assetId: 'map_winter_wheat',
+      region: roi,
+      scale: 30,
+      crs: "EPSG:4326",
+      maxPixels: 1e13
+});
